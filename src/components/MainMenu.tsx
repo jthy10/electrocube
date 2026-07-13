@@ -3,6 +3,7 @@ import {
   Bolt,
   ChevronRight,
   CircleHelp,
+  Cpu,
   Gamepad2,
   Radio,
   Sparkles,
@@ -14,21 +15,28 @@ import {
 } from 'lucide-react'
 import { CUBE_COLORS } from '../game/constants'
 import type { CubeColor } from '../game/types'
+import type { BotDifficulty } from '../game/bot'
+import { getLevelProgress, getRankTier, TRAILS, type PlayerProgression, type TrailId } from '../game/progression'
 
 export interface MainMenuProps {
   playerName: string
   playerColor: CubeColor
   soundEnabled: boolean
   reducedEffects: boolean
+  botDifficulty: BotDifficulty
+  progression: PlayerProgression
   notice?: string
   onNameChange: (name: string) => void
   onColorChange: (color: CubeColor) => void
   onPlaySolo: () => void
+  onPlayBot: () => void
+  onBotDifficultyChange: (difficulty: BotDifficulty) => void
   onCreateRoom: () => void
   onJoinRoom: (roomCode: string) => void
   onToggleSound: () => void
   onToggleReducedEffects: () => void
   onOpenHelp: () => void
+  onTrailChange: (trailId: TrailId) => void
 }
 
 const ROOM_CODE_LENGTH = 6
@@ -57,21 +65,28 @@ export function MainMenu({
   playerColor,
   soundEnabled,
   reducedEffects,
+  botDifficulty,
+  progression,
   notice = '',
   onNameChange,
   onColorChange,
   onPlaySolo,
+  onPlayBot,
+  onBotDifficultyChange,
   onCreateRoom,
   onJoinRoom,
   onToggleSound,
   onToggleReducedEffects,
   onOpenHelp,
+  onTrailChange,
 }: MainMenuProps) {
   const nameInputId = useId()
   const roomInputId = useId()
   const [nameDraft, setNameDraft] = useState(playerName)
   const [roomCode, setRoomCode] = useState('')
   const [joinAttempted, setJoinAttempted] = useState(false)
+  const levelProgress = getLevelProgress(progression.xp)
+  const rankTier = getRankTier(progression.level)
 
   const commitName = () => {
     const nextName = cleanPlayerName(nameDraft) || 'ROOKIE'
@@ -169,6 +184,26 @@ export function MainMenu({
                 })}
               </div>
             </fieldset>
+
+            <div className="pilot-progression">
+              <div className="pilot-progression__heading">
+                <span>{rankTier.label}</span>
+                <strong>LVL {progression.level}</strong>
+              </div>
+              <div className="pilot-progression__bar" aria-label={`${progression.xp} total experience`}>
+                <span style={{ width: `${levelProgress.percent}%` }} />
+              </div>
+              <label>
+                Trail signal
+                <select value={progression.selectedTrailId} onChange={(event) => onTrailChange(event.target.value as TrailId)}>
+                  {progression.unlockedTrailIds.map((trailId) => (
+                    <option key={trailId} value={trailId}>
+                      {TRAILS.find((trail) => trail.id === trailId)?.label ?? trailId.replaceAll('-', ' ')}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
           </section>
 
           <section className="play-card" aria-labelledby="play-heading">
@@ -204,6 +239,32 @@ export function MainMenu({
                 </span>
                 <ChevronRight className="mode-button__arrow" aria-hidden="true" size={21} />
               </button>
+
+              <button className="mode-button mode-button--bot" type="button" onClick={onPlayBot}>
+                <span className="mode-button__icon" aria-hidden="true">
+                  <Cpu size={23} />
+                </span>
+                <span className="mode-button__copy">
+                  <strong>Bot clash</strong>
+                  <small>Instant rival run</small>
+                </span>
+                <ChevronRight className="mode-button__arrow" aria-hidden="true" size={21} />
+              </button>
+            </div>
+
+            <div className="bot-difficulty" aria-label="Bot difficulty">
+              <span>Bot signal</span>
+              {(['easy', 'normal', 'hard'] as const).map((difficulty) => (
+                <button
+                  key={difficulty}
+                  type="button"
+                  className={botDifficulty === difficulty ? 'bot-difficulty__option bot-difficulty__option--active' : 'bot-difficulty__option'}
+                  aria-pressed={botDifficulty === difficulty}
+                  onClick={() => onBotDifficultyChange(difficulty)}
+                >
+                  {difficulty}
+                </button>
+              ))}
             </div>
 
             <div className="join-divider" aria-hidden="true">

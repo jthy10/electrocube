@@ -20,6 +20,7 @@ export interface HUDProps {
   multiplier: number
   comboTime: number
   charge: number
+  dashCooldown: number
   shields: number
   timeLeft: number
   wave: number
@@ -51,6 +52,7 @@ export function HUD({
   multiplier,
   comboTime,
   charge,
+  dashCooldown,
   shields,
   timeLeft,
   wave,
@@ -111,7 +113,7 @@ export function HUD({
         </div>
       </section>
 
-      {mode === 'duel' ? (
+      {mode !== 'solo' ? (
         <section className={`rival-readout hud-module${rival ? '' : ' rival-readout--offline'}`} aria-label="Rival status">
           <div className="rival-readout__heading">
             <span>
@@ -186,6 +188,25 @@ export function HUD({
           >
             <span style={{ width: `${chargePercent}%` }} />
           </div>
+        </div>
+      </section>
+
+      <section className="ability-status" aria-label="Ability status">
+        <div className={`ability-chip${dashCooldown <= 0 ? ' ability-chip--ready' : ''}`}>
+          <kbd>SHIFT</kbd>
+          <span>
+            <small>Volt dash</small>
+            <strong>{dashCooldown <= 0 ? 'READY' : `${dashCooldown.toFixed(1)}s`}</strong>
+          </span>
+          <i style={{ width: `${Math.max(0, 100 - (dashCooldown / 1.05) * 100)}%` }} />
+        </div>
+        <div className={`ability-chip ability-chip--pulse${charge >= MAX_CHARGE ? ' ability-chip--ready' : ''}`}>
+          <kbd>SPACE</kbd>
+          <span>
+            <small>Overdrive</small>
+            <strong>{charge >= MAX_CHARGE ? 'ARMED' : `${Math.round(charge)}%`}</strong>
+          </span>
+          <i style={{ width: `${chargePercent}%` }} />
         </div>
       </section>
 

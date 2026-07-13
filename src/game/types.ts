@@ -1,5 +1,5 @@
 export type GamePhase = 'menu' | 'lobby' | 'countdown' | 'playing' | 'paused' | 'results'
-export type GameMode = 'solo' | 'duel'
+export type GameMode = 'solo' | 'bot' | 'duel'
 
 export type CubeColor = 'cyan' | 'magenta' | 'violet' | 'lime' | 'amber'
 
@@ -47,6 +47,7 @@ export interface HudUpdate {
   multiplier?: number
   comboTime?: number
   charge?: number
+  dashCooldown?: number
   shields?: number
   timeLeft?: number
   wave?: number
@@ -59,4 +60,3 @@ export interface HudUpdate {
 export interface GameResultPayload extends RunSummary {
   mode: GameMode
 }
-

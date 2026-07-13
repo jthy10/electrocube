@@ -1,12 +1,13 @@
-import Peer, { type DataConnection } from 'peerjs'
+import type Peer from 'peerjs'
+import type { DataConnection } from 'peerjs'
 import type { CubeColor, RivalSnapshot, RunSummary } from './types'
 
-export const DUEL_PROTOCOL_VERSION = 1
+export const DUEL_PROTOCOL_VERSION = 2
 export const ROOM_CODE_LENGTH = 6
 
 const ROOM_ALPHABET = '23456789ABCDEFGHJKMNPQRSTUVWXYZ'
 const ROOM_PATTERN = /^[23456789ABCDEFGHJKMNPQRSTUVWXYZ]{6}$/
-const PEER_ID_PREFIX = 'electrocube-v1-'
+const PEER_ID_PREFIX = 'electrocube-v2-'
 const OPEN_TIMEOUT_MS = 12_000
 const CONNECTION_TIMEOUT_MS = 15_000
 const HEARTBEAT_INTERVAL_MS = 5_000
@@ -299,6 +300,8 @@ export const formatRoomCode = (value: string) => {
 
 const roomCodeToPeerId = (roomCode: string) => `${PEER_ID_PREFIX}${roomCode.toLowerCase()}`
 
+const loadPeerConstructor = async () => (await import('peerjs')).default
+
 /**
  * A single-opponent PeerJS session. Hosting reserves a human-friendly code;
  * joining connects directly to it through PeerJS's public signaling service.
@@ -350,9 +353,11 @@ export class DuelSession {
 
     let peer: Peer
     try {
-      peer = new Peer(roomCodeToPeerId(roomCode), { debug: 0 })
+      const PeerConstructor = await loadPeerConstructor()
+      if (!this.isCurrent(operation)) throw new DuelNetworkError('cancelled', 'Hosting was cancelled.')
+      peer = new PeerConstructor(roomCodeToPeerId(roomCode), { debug: 0 })
     } catch (cause) {
-      const error = mapPeerError(cause)
+      const error = cause instanceof DuelNetworkError ? cause : mapPeerError(cause)
       this.failOperation(operation, error)
       throw error
     }
@@ -381,9 +386,11 @@ export class DuelSession {
 
     let peer: Peer
     try {
-      peer = new Peer()
+      const PeerConstructor = await loadPeerConstructor()
+      if (!this.isCurrent(operation)) throw new DuelNetworkError('cancelled', 'Joining was cancelled.')
+      peer = new PeerConstructor()
     } catch (cause) {
-      const error = mapPeerError(cause)
+      const error = cause instanceof DuelNetworkError ? cause : mapPeerError(cause)
       this.failOperation(operation, error)
       throw error
     }
@@ -489,24 +496,45 @@ export class DuelSession {
   private waitForPeerOpen(peer: Peer, operation: number): Promise<string> {
     return new Promise((resolve, reject) => {
       let settled = false
-      const timeout = window.setTimeout(() => {
-        if (settled || !this.isCurrent(operation)) return
+      const rejectOnce = (error: DuelNetworkError) => {
+        if (settled) return
         settled = true
-        reject(new DuelNetworkError('timeout', 'Matchmaking took too long to respond.'))
+        window.clearTimeout(timeout)
+        reject(error)
+      }
+      const timeout = window.setTimeout(() => {
+        rejectOnce(
+          this.isCurrent(operation)
+            ? new DuelNetworkError('timeout', 'Matchmaking took too long to respond.')
+            : new DuelNetworkError('cancelled', 'Matchmaking was cancelled.'),
+        )
       }, OPEN_TIMEOUT_MS)
 
       peer.once('open', (id) => {
-        if (settled || !this.isCurrent(operation)) return
+        if (!this.isCurrent(operation)) {
+          rejectOnce(new DuelNetworkError('cancelled', 'Matchmaking was cancelled.'))
+          return
+        }
+        if (settled) return
         settled = true
         window.clearTimeout(timeout)
         resolve(id)
       })
 
       peer.once('error', (cause) => {
-        if (settled || !this.isCurrent(operation)) return
-        settled = true
-        window.clearTimeout(timeout)
-        reject(mapPeerError(cause))
+        rejectOnce(
+          this.isCurrent(operation)
+            ? mapPeerError(cause)
+            : new DuelNetworkError('cancelled', 'Matchmaking was cancelled.'),
+        )
+      })
+
+      peer.once('close', () => {
+        rejectOnce(
+          this.isCurrent(operation)
+            ? new DuelNetworkError('network', 'The matchmaking connection closed before the room opened.')
+            : new DuelNetworkError('cancelled', 'Matchmaking was cancelled.'),
+        )
       })
     })
   }
@@ -552,14 +580,17 @@ export class DuelSession {
       let opened = false
       let settled = false
       const timeout = window.setTimeout(() => {
-        if (settled || !this.isCurrent(operation)) return
-        settled = true
-        connection.close()
-        reject(new DuelNetworkError('timeout', 'The rival did not complete the direct connection.'))
+        if (settled) return
+        if (this.isCurrent(operation)) connection.close()
+        rejectBeforeOpen(
+          this.isCurrent(operation)
+            ? new DuelNetworkError('timeout', 'The rival did not complete the direct connection.')
+            : new DuelNetworkError('cancelled', 'The duel connection was cancelled.'),
+        )
       }, CONNECTION_TIMEOUT_MS)
 
       const rejectBeforeOpen = (error: DuelNetworkError) => {
-        if (opened || settled || !this.isCurrent(operation)) return
+        if (opened || settled) return
         settled = true
         window.clearTimeout(timeout)
         reject(error)
@@ -570,6 +601,7 @@ export class DuelSession {
       connection.on('open', () => {
         if (!this.isCurrent(operation)) {
           connection.close()
+          rejectBeforeOpen(new DuelNetworkError('cancelled', 'The duel connection was cancelled.'))
           return
         }
 
@@ -597,14 +629,20 @@ export class DuelSession {
       })
 
       connection.on('error', (cause) => {
-        if (!this.isCurrent(operation)) return
+        if (!this.isCurrent(operation)) {
+          rejectBeforeOpen(new DuelNetworkError('cancelled', 'The duel connection was cancelled.'))
+          return
+        }
         const error = new DuelNetworkError('connection', getErrorMessage(cause), cause)
         this.emitError(error)
         rejectBeforeOpen(error)
       })
 
       connection.on('close', () => {
-        if (!this.isCurrent(operation)) return
+        if (!this.isCurrent(operation)) {
+          rejectBeforeOpen(new DuelNetworkError('cancelled', 'The duel connection was cancelled.'))
+          return
+        }
         window.clearTimeout(timeout)
         this.stopHeartbeat()
         if (this.connection === connection) this.connection = null

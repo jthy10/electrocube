@@ -9,11 +9,14 @@ import { useGameStore } from '../game/store'
 import type { RivalSnapshot } from '../game/types'
 import { Arena } from './Arena'
 
+type PickupKind = 'normal' | 'surge' | 'shield'
+
 interface Pickup {
   id: number
   position: [number, number, number]
   color: (typeof PICKUP_COLORS)[number]
   scale: number
+  kind: PickupKind
 }
 
 interface Hunter {
@@ -39,6 +42,7 @@ interface RunStats {
   comboClock: number
   multiplier: number
   charge: number
+  targetColor: (typeof PICKUP_COLORS)[number]
   shields: number
   timeLeft: number
   wave: number
@@ -55,6 +59,7 @@ export interface GameSceneProps {
   jamSignal?: number
   matchSeed?: number
   matchEndsAt?: number
+  trailColors?: readonly [string, string]
 }
 
 const zeroRunStats = (): RunStats => ({
@@ -64,6 +69,7 @@ const zeroRunStats = (): RunStats => ({
   comboClock: 0,
   multiplier: 1,
   charge: 0,
+  targetColor: PICKUP_COLORS[0],
   shields: MAX_SHIELDS,
   timeLeft: RUN_DURATION,
   wave: 1,
@@ -98,6 +104,7 @@ const makePickups = (seed: number): Pickup[] => {
     position: arenaPoint(random),
     color: PICKUP_COLORS[id % PICKUP_COLORS.length],
     scale: 0.72 + random() * 0.32,
+    kind: id === 2 ? 'surge' : id === 9 ? 'shield' : 'normal',
   }))
 }
 
@@ -116,7 +123,14 @@ const makeHunters = (seed: number): Hunter[] => {
   })
 }
 
-function PickupCrystal({ pickup }: { pickup: Pickup }) {
+const shardName = (color: (typeof PICKUP_COLORS)[number]) => {
+  if (color === '#00f6ff') return 'CYAN'
+  if (color === '#ff2bd6') return 'MAGENTA'
+  if (color === '#a8ff36') return 'LIME'
+  return 'AMBER'
+}
+
+function PickupCrystal({ pickup, targeted }: { pickup: Pickup; targeted: boolean }) {
   const group = useRef<THREE.Group>(null)
 
   useFrame(({ clock }, delta) => {
@@ -143,7 +157,32 @@ function PickupCrystal({ pickup }: { pickup: Pickup }) {
         <torusGeometry args={[0.92, 0.025, 6, 42]} />
         <meshBasicMaterial color={pickup.color} transparent opacity={0.62} toneMapped={false} />
       </mesh>
-      <pointLight color={pickup.color} intensity={2.4} distance={4.5} decay={2} />
+      {targeted || pickup.kind !== 'normal' ? (
+        <pointLight color={pickup.color} intensity={targeted ? 2.4 : 1.5} distance={4.5} decay={2} />
+      ) : null}
+      {targeted ? (
+        <>
+          <mesh position={[0, 3.4, 0]}>
+            <cylinderGeometry args={[0.035, 0.18, 5.6, 8, 1, true]} />
+            <meshBasicMaterial color={pickup.color} transparent opacity={0.34} depthWrite={false} toneMapped={false} />
+          </mesh>
+          <mesh rotation={[Math.PI / 2, 0, 0]} scale={1.45}>
+            <torusGeometry args={[0.92, 0.045, 6, 42]} />
+            <meshBasicMaterial color="#ffffff" transparent opacity={0.8} toneMapped={false} />
+          </mesh>
+        </>
+      ) : null}
+      {pickup.kind !== 'normal' ? (
+        <mesh rotation={[Math.PI / 3, Math.PI / 4, 0]} scale={pickup.kind === 'shield' ? 1.35 : 1.55}>
+          <torusGeometry args={[0.78, 0.045, 5, pickup.kind === 'shield' ? 6 : 3]} />
+          <meshBasicMaterial
+            color={pickup.kind === 'shield' ? '#ffffff' : '#a8ff36'}
+            transparent
+            opacity={0.82}
+            toneMapped={false}
+          />
+        </mesh>
+      ) : null}
     </group>
   )
 }
@@ -256,13 +295,18 @@ function RivalCube({ rival }: { rival: RivalSnapshot }) {
 function LaserSweep({ active }: { active: boolean }) {
   const group = useRef<THREE.Group>(null)
   const material = useRef<THREE.MeshBasicMaterial>(null)
+  const warningMaterial = useRef<THREE.MeshBasicMaterial>(null)
 
   useFrame(({ clock }) => {
     if (!group.current) return
     const speed = 0.36 + useGameStore.getState().wave * 0.035
-    group.current.rotation.y = -clock.elapsedTime * speed
+    const runTime = Math.max(0, RUN_DURATION - useGameStore.getState().timeLeft)
+    group.current.rotation.y = -runTime * speed
     if (material.current) {
       material.current.opacity = active ? 0.58 + Math.sin(clock.elapsedTime * 8) * 0.14 : 0.18
+    }
+    if (warningMaterial.current) {
+      warningMaterial.current.opacity = active ? 0.08 + Math.sin(clock.elapsedTime * 4) * 0.035 : 0.025
     }
   })
 
@@ -279,6 +323,18 @@ function LaserSweep({ active }: { active: boolean }) {
           toneMapped={false}
         />
       </mesh>
+      <mesh position={[0, 0.08, 0]}>
+        <boxGeometry args={[ARENA_RADIUS * 2 - 7, 0.025, 1.15]} />
+        <meshBasicMaterial
+          ref={warningMaterial}
+          color="#ff245f"
+          transparent
+          opacity={active ? 0.1 : 0.025}
+          blending={THREE.AdditiveBlending}
+          depthWrite={false}
+          toneMapped={false}
+        />
+      </mesh>
       <mesh position={[ARENA_RADIUS - 3.5, 0.68, 0]}>
         <sphereGeometry args={[0.34, 12, 12]} />
         <meshBasicMaterial color="#ffffff" toneMapped={false} />
@@ -287,7 +343,7 @@ function LaserSweep({ active }: { active: boolean }) {
   )
 }
 
-function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt }: GameSceneProps) {
+function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt, trailColors }: GameSceneProps) {
   const phase = useGameStore((state) => state.phase)
   const mode = useGameStore((state) => state.mode)
   const playerName = useGameStore((state) => state.playerName)
@@ -303,16 +359,20 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
   const keys = useRef(new Set<string>())
   const pulseWasDown = useRef(false)
   const dashWasDown = useRef(false)
+  const cameraShake = useRef(0)
   const playerPosition = useRef(new THREE.Vector3(0, 1.05, 8))
   const velocity = useRef(new THREE.Vector3())
   const lookDirection = useRef(new THREE.Vector3(0, 0, -1))
   const cameraTarget = useRef(new THREE.Vector3())
+  const shakeOffset = useRef(new THREE.Vector3())
   const stats = useRef<RunStats>(zeroRunStats())
+  const runElapsed = useRef(0)
   const seed = useRef(Math.floor(Date.now() / 86_400_000) + 8088)
   const hunters = useRef<Hunter[]>(makeHunters(seed.current))
   const lastHudUpdate = useRef(0)
   const lastSnapshotAt = useRef(0)
   const damageCooldown = useRef(0)
+  const deflectCooldown = useRef(0)
   const dashCooldown = useRef(0)
   const dashClock = useRef(0)
   const dashDirection = useRef(new THREE.Vector3(0, 0, -1))
@@ -323,6 +383,8 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
   const pulseId = useRef(0)
   const gateCooldowns = useRef([0, 0, 0, 0])
   const [pickups, setPickups] = useState(() => makePickups(seed.current))
+  const [targetColor, setTargetColor] = useState<(typeof PICKUP_COLORS)[number]>(PICKUP_COLORS[0])
+  const [bankReady, setBankReady] = useState(false)
   const [bursts, setBursts] = useState<BurstData[]>([])
   const [activePulse, setActivePulse] = useState<{ id: number; position: THREE.Vector3 } | null>(null)
 
@@ -345,6 +407,14 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
 
   const applyDamage = (source: THREE.Vector3, label: string) => {
     if (damageCooldown.current > 0 || phase !== 'playing') return
+    if (dashClock.current > 0) {
+      if (deflectCooldown.current <= 0) {
+        deflectCooldown.current = 0.3
+        addBurst(playerPosition.current, palette.primary, false)
+        gameAudio.play('shield', { gain: 0.5, pitch: 1.35 })
+      }
+      return
+    }
     damageCooldown.current = 1.35
     const current = stats.current
     current.shields = Math.max(0, current.shields - 1)
@@ -355,6 +425,7 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
     const push = playerPosition.current.clone().sub(source).setY(0).normalize().multiplyScalar(15)
     velocity.current.add(push)
     addBurst(playerPosition.current, '#ff356e', true)
+    cameraShake.current = Math.max(cameraShake.current, 0.58)
     gameAudio.play('hit')
     setTimedNotice(`${label} // -250 SIGNAL`)
 
@@ -390,8 +461,13 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
 
   useEffect(() => {
     if (phase !== 'countdown') return
-    seed.current = mode === 'duel' && matchSeed ? matchSeed : Math.floor(Date.now() / 86_400_000) + 8_088
+    seed.current = mode !== 'solo' && matchSeed ? matchSeed : Math.floor(Date.now() / 86_400_000) + 8_088
     stats.current = zeroRunStats()
+    runElapsed.current = 0
+    const firstTarget = PICKUP_COLORS[Math.abs(seed.current) % PICKUP_COLORS.length]
+    stats.current.targetColor = firstTarget
+    setTargetColor(firstTarget)
+    setBankReady(false)
     hunters.current = makeHunters(seed.current)
     setPickups(makePickups(seed.current))
     setBursts([])
@@ -401,6 +477,7 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
     dashCooldown.current = 0
     dashClock.current = 0
     damageCooldown.current = 0
+    deflectCooldown.current = 0
     runFinished.current = false
     gateCooldowns.current.fill(0)
     useGameStore.getState().updateHud({
@@ -409,6 +486,7 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
       multiplier: 1,
       comboTime: 0,
       charge: 0,
+      dashCooldown: 0,
       shields: MAX_SHIELDS,
       timeLeft: RUN_DURATION,
       wave: 1,
@@ -434,7 +512,8 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
   )
 
   useFrame(({ clock }, delta) => {
-    const dt = Math.min(delta, 0.05)
+    const runDelta = Math.max(0, delta)
+    const dt = Math.min(runDelta, 0.05)
     const elapsed = clock.elapsedTime
     const current = stats.current
     const isPlaying = phase === 'playing'
@@ -452,27 +531,46 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
     } else {
       current.timeLeft = mode === 'duel' && matchEndsAt
         ? Math.max(0, (matchEndsAt - Date.now()) / 1_000)
-        : Math.max(0, current.timeLeft - dt)
-      current.comboClock = Math.max(0, current.comboClock - dt)
-      damageCooldown.current = Math.max(0, damageCooldown.current - dt)
-      dashCooldown.current = Math.max(0, dashCooldown.current - dt)
-      dashClock.current = Math.max(0, dashClock.current - dt)
-      gateCooldowns.current = gateCooldowns.current.map((value) => Math.max(0, value - dt))
+        : Math.max(0, current.timeLeft - runDelta)
+      const runTime = mode === 'duel' && matchEndsAt
+        ? Math.max(0, RUN_DURATION - current.timeLeft)
+        : (runElapsed.current += runDelta)
+      current.comboClock = Math.max(0, current.comboClock - runDelta)
+      damageCooldown.current = Math.max(0, damageCooldown.current - runDelta)
+      deflectCooldown.current = Math.max(0, deflectCooldown.current - runDelta)
+      dashCooldown.current = Math.max(0, dashCooldown.current - runDelta)
+      dashClock.current = Math.max(0, dashClock.current - runDelta)
+      for (let index = 0; index < gateCooldowns.current.length; index += 1) {
+        gateCooldowns.current[index] = Math.max(0, gateCooldowns.current[index] - runDelta)
+      }
 
       if (current.comboClock === 0 && current.combo > 0) {
         current.combo = 0
         current.multiplier = 1
       }
 
-      const horizontal = Number(keys.current.has('d') || keys.current.has('arrowright') || isVirtualControlDown('right')) - Number(keys.current.has('a') || keys.current.has('arrowleft') || isVirtualControlDown('left'))
-      const vertical = Number(keys.current.has('s') || keys.current.has('arrowdown') || isVirtualControlDown('down')) - Number(keys.current.has('w') || keys.current.has('arrowup') || isVirtualControlDown('up'))
+      const gamepad = navigator.getGamepads?.()[0]
+      const axisX = Math.abs(gamepad?.axes[0] ?? 0) > 0.16 ? gamepad?.axes[0] ?? 0 : 0
+      const axisZ = Math.abs(gamepad?.axes[1] ?? 0) > 0.16 ? gamepad?.axes[1] ?? 0 : 0
+      const horizontal = THREE.MathUtils.clamp(
+        Number(keys.current.has('d') || keys.current.has('arrowright') || isVirtualControlDown('right')) -
+          Number(keys.current.has('a') || keys.current.has('arrowleft') || isVirtualControlDown('left')) + axisX,
+        -1,
+        1,
+      )
+      const vertical = THREE.MathUtils.clamp(
+        Number(keys.current.has('s') || keys.current.has('arrowdown') || isVirtualControlDown('down')) -
+          Number(keys.current.has('w') || keys.current.has('arrowup') || isVirtualControlDown('up')) + axisZ,
+        -1,
+        1,
+      )
       const input = new THREE.Vector3(horizontal, 0, vertical)
       if (input.lengthSq() > 0) {
         input.normalize()
         lookDirection.current.lerp(input, 1 - Math.exp(-dt * 12)).normalize()
       }
 
-      const dashDown = keys.current.has('shift') || isVirtualControlDown('dash')
+      const dashDown = keys.current.has('shift') || isVirtualControlDown('dash') || Boolean(gamepad?.buttons[0]?.pressed)
       if (dashDown && !dashWasDown.current && dashCooldown.current <= 0) {
         dashClock.current = 0.22
         dashCooldown.current = 1.05
@@ -500,18 +598,19 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
       }
       playerPosition.current.y = 1.05 + Math.sin(elapsed * 8) * 0.055
 
-      const pulseDown = keys.current.has(' ') || isVirtualControlDown('pulse')
+      const pulseDown = keys.current.has(' ') || isVirtualControlDown('pulse') || Boolean(gamepad?.buttons[1]?.pressed || gamepad?.buttons[2]?.pressed)
       if (pulseDown && !pulseWasDown.current) {
         if (current.charge >= MAX_CHARGE) {
           current.charge = 0
           pulseId.current += 1
           setActivePulse({ id: pulseId.current, position: playerPosition.current.clone() })
           addBurst(playerPosition.current, palette.primary, true)
+          cameraShake.current = Math.max(cameraShake.current, 0.72)
           let disabled = 0
           hunters.current.forEach((hunter) => {
             if (!hunter.alive || hunter.position.distanceTo(playerPosition.current) > 16) return
             hunter.alive = false
-            hunter.respawnAt = elapsed + 4.5
+            hunter.respawnAt = runTime + 4.5
             disabled += 1
           })
           current.drones += disabled
@@ -531,27 +630,57 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
         const dz = pickup.position[2] - playerPosition.current.z
         if (dx * dx + dz * dz > pickupRadiusSq) return
 
-        const base = 100 + Math.min(300, current.combo * 12)
+        const onCircuit = pickup.color === current.targetColor
+        const base = (onCircuit ? 180 : 70) + Math.min(300, current.combo * 12)
         current.combo += 1
         current.bestCombo = Math.max(current.bestCombo, current.combo)
         current.comboClock = 3.25
         current.multiplier = Math.min(5, 1 + Math.floor(current.combo / 4) * 0.5)
         current.score += Math.round(base * current.multiplier)
-        current.charge = Math.min(MAX_CHARGE, current.charge + 9 + current.combo * 0.28)
+        current.charge = Math.min(MAX_CHARGE, current.charge + (onCircuit ? 12 : 5) + current.combo * 0.22)
         current.shards += 1
-        current.objectiveProgress = Math.min(current.objectiveTarget, current.objectiveProgress + 1)
+        if (pickup.kind === 'surge') {
+          dashCooldown.current = 0
+          current.charge = Math.min(MAX_CHARGE, current.charge + 20)
+          current.score += 350
+          setTimedNotice('SURGE SHARD // DASH RESET +350', 950)
+        } else if (pickup.kind === 'shield') {
+          const restoredShield = current.shields < MAX_SHIELDS
+          if (restoredShield) current.shields += 1
+          else current.score += 250
+          setTimedNotice(restoredShield ? 'SHIELD FRAGMENT RESTORED' : 'SHIELD OVERFLOW // +250', 950)
+        }
+        if (onCircuit) {
+          current.objectiveProgress = Math.min(current.objectiveTarget, current.objectiveProgress + 1)
+          if (current.objectiveProgress < current.objectiveTarget) {
+            const currentColorIndex = PICKUP_COLORS.indexOf(current.targetColor)
+            const nextColor = PICKUP_COLORS[(currentColorIndex + 1 + (current.wave % 2)) % PICKUP_COLORS.length]
+            current.targetColor = nextColor
+            setTargetColor(nextColor)
+          }
+        }
         addBurst(pickup.position, pickup.color, current.combo % 4 === 0)
-        gameAudio.play(current.combo % 4 === 0 ? 'combo' : 'collect', { pitch: 0.88 + Math.min(0.5, current.combo * 0.025) })
+        gameAudio.play(onCircuit || current.combo % 4 === 0 ? 'combo' : 'collect', {
+          pitch: (onCircuit ? 1.04 : 0.76) + Math.min(0.42, current.combo * 0.02),
+        })
 
         if (current.objectiveProgress >= current.objectiveTarget) {
+          setBankReady(true)
           setTimedNotice('CIRCUIT READY // RETURN TO REACTOR', 1_350)
         }
 
         const random = seededRandom(seed.current + pickup.id * 211 + current.shards * 997)
+        const kindRoll = random()
+        const nextKind: PickupKind = kindRoll < 0.07 ? 'shield' : kindRoll < 0.17 ? 'surge' : 'normal'
         setPickups((all) =>
           all.map((item) =>
             item.id === pickup.id
-              ? { ...item, position: arenaPoint(random), color: PICKUP_COLORS[(current.shards + item.id) % PICKUP_COLORS.length] }
+              ? {
+                  ...item,
+                  position: arenaPoint(random),
+                  color: PICKUP_COLORS[(current.shards + item.id) % PICKUP_COLORS.length],
+                  kind: nextKind,
+                }
               : item,
           ),
         )
@@ -563,10 +692,15 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
         current.banks += 1
         current.wave += 1
         current.objectiveProgress = 0
+        setBankReady(false)
         current.objectiveTarget = Math.min(15, 7 + current.wave)
+        const bankTarget = PICKUP_COLORS[current.wave % PICKUP_COLORS.length]
+        current.targetColor = bankTarget
+        setTargetColor(bankTarget)
         current.shields = Math.min(MAX_SHIELDS, current.shields + 1)
         current.charge = Math.min(MAX_CHARGE, current.charge + 18)
         addBurst(playerPosition.current, '#ffffff', true)
+        cameraShake.current = Math.max(cameraShake.current, 0.82)
         gameAudio.play('bank')
         setTimedNotice(`CIRCUIT BANKED // +${bankBonus.toLocaleString()}`, 1_700)
       }
@@ -576,8 +710,8 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
 
       hunters.current.forEach((hunter, index) => {
         const visual = hunterRefs.current.get(hunter.id)
-        if (!hunter.alive && elapsed >= hunter.respawnAt) {
-          const angle = hunter.phase + elapsed * 0.17
+        if (!hunter.alive && runTime >= hunter.respawnAt) {
+          const angle = hunter.phase + runTime * 0.17
           hunter.position.set(Math.cos(angle) * (ARENA_RADIUS - 3), 1.2, Math.sin(angle) * (ARENA_RADIUS - 3))
           hunter.velocity.set(0, 0, 0)
           hunter.alive = index < Math.min(5, 1 + current.wave)
@@ -588,23 +722,23 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
         }
 
         const desired = playerPosition.current.clone().sub(hunter.position).setY(0).normalize()
-        const orbit = new THREE.Vector3(-desired.z, 0, desired.x).multiplyScalar(Math.sin(elapsed * 1.7 + hunter.phase) * 1.1)
+        const orbit = new THREE.Vector3(-desired.z, 0, desired.x).multiplyScalar(Math.sin(runTime * 1.7 + hunter.phase) * 1.1)
         desired.add(orbit).normalize().multiplyScalar(4.1 + current.wave * 0.48 + index * 0.22)
         hunter.velocity.lerp(desired, 1 - Math.exp(-dt * 2.2))
         hunter.position.addScaledVector(hunter.velocity, dt)
-        hunter.position.y = 1.15 + Math.sin(elapsed * 4 + hunter.phase) * 0.18
+        hunter.position.y = 1.15 + Math.sin(runTime * 4 + hunter.phase) * 0.18
 
         if (visual) {
           visual.visible = true
           visual.position.copy(hunter.position)
           visual.rotation.y += dt * (1.2 + index * 0.18)
-          visual.rotation.z = Math.sin(elapsed * 2 + hunter.phase) * 0.24
+          visual.rotation.z = Math.sin(runTime * 2 + hunter.phase) * 0.24
         }
 
         if (hunter.position.distanceToSquared(playerPosition.current) < 2.4) applyDamage(hunter.position, 'HUNTER IMPACT')
       })
 
-      const laserAngle = elapsed * (0.36 + current.wave * 0.035)
+      const laserAngle = runTime * (0.36 + current.wave * 0.035)
       const lineDistance = Math.abs(playerPosition.current.x * Math.sin(laserAngle) - playerPosition.current.z * Math.cos(laserAngle))
       const playerRadius = Math.hypot(playerPosition.current.x, playerPosition.current.z)
       if (lineDistance < 0.66 && playerRadius > 5 && playerRadius < ARENA_RADIUS - 3) {
@@ -636,7 +770,7 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
           drones: current.drones,
           banks: current.banks,
           duration: RUN_DURATION,
-          won: mode === 'duel' ? current.score >= opponentScore : undefined,
+          won: mode !== 'solo' ? current.score > opponentScore : undefined,
         })
       }
     }
@@ -669,6 +803,15 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
       playerPosition.current.z + (playCamera ? 19 : 15),
     )
     camera.position.lerp(cameraTarget.current, 1 - Math.exp(-dt * (playCamera ? 4.2 : 1.8)))
+    if (cameraShake.current > 0) {
+      shakeOffset.current.set(
+        Math.sin(elapsed * 83) * cameraShake.current * 0.16,
+        Math.cos(elapsed * 71) * cameraShake.current * 0.1,
+        0,
+      )
+      camera.position.add(shakeOffset.current)
+      cameraShake.current = Math.max(0, cameraShake.current - dt * 2.8)
+    }
     camera.lookAt(
       playerPosition.current.x,
       playCamera ? 0.5 : 1.4,
@@ -683,6 +826,7 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
         multiplier: current.multiplier,
         comboTime: (current.comboClock / 3.25) * 100,
         charge: current.charge,
+        dashCooldown: dashCooldown.current,
         shields: current.shields,
         timeLeft: current.timeLeft,
         wave: current.wave,
@@ -691,7 +835,7 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
             ? 'Return to the central reactor to bank'
             : current.charge >= MAX_CHARGE
               ? 'Press SPACE to unleash Overdrive'
-              : 'Collect charge shards',
+              : `Collect ${shardName(current.targetColor)} circuit shard`,
         objectiveProgress: current.objectiveProgress,
         objectiveTarget: current.objectiveTarget,
       })
@@ -715,10 +859,10 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
 
   return (
     <>
-      <Arena reducedEffects={reducedEffects} />
+      <Arena reducedEffects={reducedEffects} bankReady={bankReady} />
 
       {pickups.map((pickup) => (
-        <PickupCrystal key={pickup.id} pickup={pickup} />
+        <PickupCrystal key={pickup.id} pickup={pickup} targeted={!bankReady && pickup.color === targetColor} />
       ))}
 
       <group rotation={[0, 0, 0]}>
@@ -787,7 +931,7 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
         />
       ) : null}
 
-      {rival && mode === 'duel' ? <RivalCube rival={rival} /> : null}
+      {rival && mode !== 'solo' ? <RivalCube rival={rival} /> : null}
 
       {Array.from({ length: reducedEffects ? 2 : 5 }, (_, index) => (
         <mesh
@@ -799,7 +943,7 @@ function GameWorld({ onSnapshot, onPulse, jamSignal = 0, matchSeed, matchEndsAt 
         >
           <boxGeometry args={[0.95, 0.2, 0.95]} />
           <meshBasicMaterial
-            color={index % 2 ? palette.secondary : palette.primary}
+            color={index % 2 ? (trailColors?.[1] ?? palette.secondary) : (trailColors?.[0] ?? palette.primary)}
             transparent
             opacity={0.22 - index * 0.028}
             depthWrite={false}

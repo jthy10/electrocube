@@ -162,11 +162,14 @@ export const recordScore = (score: LeaderboardScore): LeaderboardResult => {
     isPlayer: true,
   }
 
-  const playerEntries = [...readPlayerEntries(), entry].sort(compareEntries).slice(0, MAX_STORED_RUNS)
+  const rankedPlayerEntries = [...readPlayerEntries(), entry].sort(compareEntries)
+  const completeRanking = [...SEEDED_LEGENDS.map((legend) => ({ ...legend })), ...rankedPlayerEntries]
+    .sort(compareEntries)
+  const rank = completeRanking.findIndex((candidate) => candidate.id === entry.id) + 1
+  const playerEntries = rankedPlayerEntries.slice(0, MAX_STORED_RUNS)
   writePlayerEntries(playerEntries)
 
   const completeLeaderboard = getLeaderboard(Number.MAX_SAFE_INTEGER)
-  const rank = completeLeaderboard.findIndex((candidate) => candidate.id === entry.id) + 1
   notifyListeners()
 
   return { entry, rank, leaderboard: completeLeaderboard.slice(0, 10) }

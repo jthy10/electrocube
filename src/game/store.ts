@@ -23,6 +23,7 @@ interface GameStore {
   multiplier: number
   comboTime: number
   charge: number
+  dashCooldown: number
   shields: number
   timeLeft: number
   wave: number
@@ -74,6 +75,7 @@ export const useGameStore = create<GameStore>()(
       multiplier: 1,
       comboTime: 0,
       charge: 0,
+      dashCooldown: 0,
       shields: MAX_SHIELDS,
       timeLeft: RUN_DURATION,
       wave: 1,
@@ -107,6 +109,7 @@ export const useGameStore = create<GameStore>()(
           multiplier: 1,
           comboTime: 0,
           charge: 0,
+          dashCooldown: 0,
           shields: MAX_SHIELDS,
           timeLeft: RUN_DURATION,
           wave: 1,

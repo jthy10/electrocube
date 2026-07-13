@@ -1,5 +1,4 @@
-import { Suspense, useCallback, useEffect, useRef, useState } from 'react'
-import { Bloom, EffectComposer, Vignette } from '@react-three/postprocessing'
+import { lazy, Suspense, useCallback, useEffect, useRef, useState } from 'react'
 import { Canvas } from '@react-three/fiber'
 import * as THREE from 'three'
 import { GameScene } from './components/GameScene'
@@ -8,8 +7,10 @@ import { HUD } from './components/HUD'
 import { Lobby } from './components/Lobby'
 import { MainMenu } from './components/MainMenu'
 import { MobileControls } from './components/MobileControls'
+import { Onboarding } from './components/Onboarding'
 import { ResultsScreen } from './components/ResultsScreen'
 import { gameAudio } from './game/audio'
+import { createBotRival, type BotDifficulty, type BotRivalSimulator } from './game/bot'
 import { getLeaderboard, recordScore, subscribeLeaderboard } from './game/leaderboard'
 import {
   createDuelSession,
@@ -20,8 +21,35 @@ import {
   type DuelSession,
 } from './game/multiplayer'
 import { resetVirtualControls } from './game/input'
+import {
+  readProgression,
+  recordCompletedRun,
+  recordDuelVictory,
+  selectTrail,
+  TRAILS,
+  type PlayerProgression,
+  type RecordRunResult,
+  type TrailId,
+} from './game/progression'
 import { useGameStore } from './game/store'
-import type { CubeColor, LeaderboardEntry, RivalSnapshot } from './game/types'
+import type { CubeColor, GameMode, LeaderboardEntry, RivalSnapshot, RunSummary } from './game/types'
+
+const SceneEffects = lazy(() => import('./components/SceneEffects'))
+
+const resultKeyFor = (mode: GameMode, result: RunSummary) =>
+  `${mode}:${result.score}:${result.bestCombo}:${result.shards}:${result.duration}`
+
+const combineProgressionRewards = (base: RecordRunResult, bonus: RecordRunResult): RecordRunResult => ({
+  previous: base.previous,
+  progression: bonus.progression,
+  runXp: base.runXp + bonus.runXp,
+  achievementXp: base.achievementXp + bonus.achievementXp,
+  xpEarned: base.xpEarned + bonus.xpEarned,
+  levelsGained: Math.max(0, bonus.progression.level - base.previous.level),
+  rankChanged: bonus.progression.rankTier !== base.previous.rankTier,
+  newlyUnlockedAchievements: [...base.newlyUnlockedAchievements, ...bonus.newlyUnlockedAchievements],
+  newlyUnlockedTrails: [...base.newlyUnlockedTrails, ...bonus.newlyUnlockedTrails],
+})
 
 const emptyRival = (name: string, color: CubeColor): RivalSnapshot => ({
   name,
@@ -35,14 +63,11 @@ const emptyRival = (name: string, color: CubeColor): RivalSnapshot => ({
   updatedAt: Date.now(),
 })
 
-function SceneEffects({ reduced }: { reduced: boolean }) {
-  if (reduced) return null
-  return (
-    <EffectComposer multisampling={0} enableNormalPass={false}>
-      <Bloom intensity={1.25} luminanceThreshold={0.32} luminanceSmoothing={0.72} mipmapBlur />
-      <Vignette eskil={false} offset={0.18} darkness={0.72} />
-    </EffectComposer>
-  )
+const flashNotice = (message: string, duration = 1_600) => {
+  useGameStore.getState().setNotice(message)
+  window.setTimeout(() => {
+    if (useGameStore.getState().notice === message) useGameStore.getState().setNotice('')
+  }, duration)
 }
 
 function CountdownOverlay({ count }: { count: number }) {
@@ -67,6 +92,7 @@ function App() {
   const multiplier = useGameStore((state) => state.multiplier)
   const comboTime = useGameStore((state) => state.comboTime)
   const charge = useGameStore((state) => state.charge)
+  const dashCooldown = useGameStore((state) => state.dashCooldown)
   const shields = useGameStore((state) => state.shields)
   const timeLeft = useGameStore((state) => state.timeLeft)
   const wave = useGameStore((state) => state.wave)
@@ -80,16 +106,80 @@ function App() {
   const countdown = useGameStore((state) => state.countdown)
   const notice = useGameStore((state) => state.notice)
   const [helpOpen, setHelpOpen] = useState(false)
+  const [showTutorial, setShowTutorial] = useState(() => {
+    try { return window.localStorage.getItem('electrocube-onboarding-v1') !== 'done' } catch { return true }
+  })
   const [booting, setBooting] = useState(true)
   const [isHost, setIsHost] = useState(false)
   const [jamSignal, setJamSignal] = useState(0)
+  const [botDifficulty, setBotDifficulty] = useState<BotDifficulty>(() => {
+    try {
+      const saved = window.localStorage.getItem('electrocube-bot-difficulty')
+      return saved === 'normal' || saved === 'hard' ? saved : 'easy'
+    } catch {
+      return 'easy'
+    }
+  })
+  const [progression, setProgression] = useState<PlayerProgression>(() => readProgression())
+  const [progressionReward, setProgressionReward] = useState<RecordRunResult | null>(null)
+  const [currentRunRank, setCurrentRunRank] = useState<number | null>(null)
   const [matchConfig, setMatchConfig] = useState<{ seed: number; startsAt: number; duration: number } | null>(null)
   const [leaderboard, setLeaderboard] = useState<LeaderboardEntry[]>(() => getLeaderboard(10))
   const sessionRef = useRef<DuelSession | null>(null)
+  const botSimulatorRef = useRef<BotRivalSimulator | null>(null)
   const duelStartsAt = useRef(0)
   const remoteFinishScore = useRef<number | null>(null)
+  const duelFinalizeTimer = useRef<number | null>(null)
   const recordedResult = useRef('')
+  const resolvedDuelOutcome = useRef('')
+  const baseProgressionReward = useRef<RecordRunResult | null>(null)
+  const finishSent = useRef('')
   const autoJoinAttempted = useRef(false)
+
+  const clearDuelFinalizeTimer = useCallback(() => {
+    if (duelFinalizeTimer.current === null) return
+    window.clearTimeout(duelFinalizeTimer.current)
+    duelFinalizeTimer.current = null
+  }, [])
+
+  const archiveRun = useCallback((run: RunSummary, runMode: GameMode) => {
+    const resultKey = resultKeyFor(runMode, run)
+    if (recordedResult.current === resultKey) {
+      return { resultKey, archived: false, reward: baseProgressionReward.current }
+    }
+    recordedResult.current = resultKey
+    const submission = recordScore({
+      name: playerName,
+      score: run.score,
+      color: playerColor,
+      combo: run.bestCombo,
+    })
+    setLeaderboard(submission.leaderboard)
+    setCurrentRunRank(submission.rank)
+    const reward = recordCompletedRun(
+      runMode === 'duel'
+        ? { ...run, mode: 'duel', won: undefined }
+        : { ...run, mode: runMode },
+    )
+    baseProgressionReward.current = reward
+    setProgression(reward.progression)
+    setProgressionReward(reward)
+    return { resultKey, archived: true, reward }
+  }, [playerColor, playerName])
+
+  const resolveDuelProgression = useCallback((resultKey: string, won: boolean) => {
+    if (resolvedDuelOutcome.current === resultKey) return false
+    resolvedDuelOutcome.current = resultKey
+    if (!won) return true
+    const bonus = recordDuelVictory()
+    const combined = baseProgressionReward.current
+      ? combineProgressionRewards(baseProgressionReward.current, bonus)
+      : bonus
+    baseProgressionReward.current = combined
+    setProgression(combined.progression)
+    setProgressionReward(combined)
+    return true
+  }, [])
 
   useEffect(() => {
     const timeout = window.setTimeout(() => setBooting(false), 850)
@@ -101,6 +191,16 @@ function App() {
   useEffect(() => {
     gameAudio.setEnabled(soundEnabled)
   }, [soundEnabled])
+
+  useEffect(() => {
+    try { window.localStorage.setItem('electrocube-bot-difficulty', botDifficulty) } catch { /* storage is optional */ }
+  }, [botDifficulty])
+
+  useEffect(() => {
+    if (!showTutorial || wave <= 1) return
+    setShowTutorial(false)
+    try { window.localStorage.setItem('electrocube-onboarding-v1', 'done') } catch { /* storage is optional */ }
+  }, [showTutorial, wave])
 
   useEffect(() => {
     const unlock = () => {
@@ -119,6 +219,7 @@ function App() {
   useEffect(
     () => () => {
       sessionRef.current?.dispose()
+      if (duelFinalizeTimer.current !== null) window.clearTimeout(duelFinalizeTimer.current)
       resetVirtualControls()
       gameAudio.stopMusic(0.05)
     },
@@ -126,12 +227,18 @@ function App() {
   )
 
   const launchDuel = useCallback(() => {
+    clearDuelFinalizeTimer()
     const startsAt = Date.now() + 3_000
     const seed = Math.floor(Math.random() * 2_000_000_000)
     const duration = 90
     duelStartsAt.current = startsAt
     remoteFinishScore.current = null
     recordedResult.current = ''
+    resolvedDuelOutcome.current = ''
+    baseProgressionReward.current = null
+    finishSent.current = ''
+    setProgressionReward(null)
+    setCurrentRunRank(null)
     sessionRef.current?.send({
       type: 'start',
       seed,
@@ -140,7 +247,7 @@ function App() {
     })
     setMatchConfig({ seed, startsAt, duration })
     useGameStore.getState().prepareRun('duel')
-  }, [])
+  }, [clearDuelFinalizeTimer])
 
   const handleDuelMessage = useCallback(
     (message: DuelMessage) => {
@@ -154,10 +261,16 @@ function App() {
           store.setRival(message.snapshot)
           break
         case 'start': {
+          clearDuelFinalizeTimer()
           duelStartsAt.current = message.startsAt
           setMatchConfig({ seed: message.seed, startsAt: message.startsAt, duration: message.duration })
           remoteFinishScore.current = null
           recordedResult.current = ''
+          resolvedDuelOutcome.current = ''
+          baseProgressionReward.current = null
+          finishSent.current = ''
+          setProgressionReward(null)
+          setCurrentRunRank(null)
           useGameStore.getState().prepareRun('duel')
           break
         }
@@ -165,14 +278,14 @@ function App() {
           setJamSignal((value) => value + 1)
           break
         case 'finish': {
+          clearDuelFinalizeTimer()
           remoteFinishScore.current = message.summary.score
           const current = store.rival
           if (current) store.setRival({ ...current, score: message.summary.score, updatedAt: Date.now() })
           const localResult = store.result
           if (localResult && store.phase === 'results' && store.mode === 'duel') {
-            const won = localResult.score >= message.summary.score
+            const won = localResult.score > message.summary.score
             store.finishRun({ ...localResult, mode: 'duel', won })
-            gameAudio.play(won ? 'victory' : 'defeat')
           }
           break
         }
@@ -196,7 +309,7 @@ function App() {
           break
       }
     },
-    [launchDuel],
+    [clearDuelFinalizeTimer, launchDuel],
   )
 
   const createSession = useCallback(() => {
@@ -228,12 +341,44 @@ function App() {
   }, [])
 
   const playSolo = useCallback(() => {
+    clearDuelFinalizeTimer()
+    recordedResult.current = ''
+    resolvedDuelOutcome.current = ''
+    baseProgressionReward.current = null
+    finishSent.current = ''
     sessionRef.current?.close('Switched to solo')
     sessionRef.current = null
     useGameStore.getState().setRival(null)
+    botSimulatorRef.current = null
+    setProgressionReward(null)
+    setCurrentRunRank(null)
     unlockGameAudio()
     useGameStore.getState().prepareRun('solo')
-  }, [unlockGameAudio])
+  }, [clearDuelFinalizeTimer, unlockGameAudio])
+
+  const playBot = useCallback(() => {
+    clearDuelFinalizeTimer()
+    recordedResult.current = ''
+    resolvedDuelOutcome.current = ''
+    baseProgressionReward.current = null
+    finishSent.current = ''
+    sessionRef.current?.close('Switched to bot clash')
+    sessionRef.current = null
+    unlockGameAudio()
+    const seed = Math.floor(Math.random() * 2_000_000_000)
+    const simulator = createBotRival({
+      seed,
+      difficulty: botDifficulty,
+      name: botDifficulty === 'hard' ? 'VANTA//PRIME' : botDifficulty === 'easy' ? 'SPARK_BOT' : 'VANTA//7',
+      color: botDifficulty === 'hard' ? 'amber' : 'magenta',
+    })
+    botSimulatorRef.current = simulator
+    setProgressionReward(null)
+    setCurrentRunRank(null)
+    setMatchConfig({ seed, startsAt: Date.now() + 3_000, duration: 90 })
+    useGameStore.getState().setRival(simulator.sample(0, 0, Date.now()))
+    useGameStore.getState().prepareRun('bot')
+  }, [botDifficulty, clearDuelFinalizeTimer, unlockGameAudio])
 
   const createRoom = useCallback(async () => {
     unlockGameAudio()
@@ -312,31 +457,78 @@ function App() {
   }, [mode, phase])
 
   useEffect(() => {
-    if (phase !== 'results' || !result) return
-    const resultKey = `${mode}:${result.score}:${result.bestCombo}:${result.shards}:${result.duration}`
-    if (recordedResult.current === resultKey) return
-    recordedResult.current = resultKey
-    const submission = recordScore({
-      name: playerName,
-      score: result.score,
-      color: playerColor,
-      combo: result.bestCombo,
-    })
-    setLeaderboard(submission.leaderboard)
-    sessionRef.current?.send({ type: 'finish', summary: result })
-    gameAudio.stopMusic(0.8)
-    if (mode === 'solo') gameAudio.play('victory')
-    else if (remoteFinishScore.current !== null) {
-      gameAudio.play(result.score >= remoteFinishScore.current ? 'victory' : 'defeat')
+    if (phase !== 'playing' || mode !== 'bot' || !botSimulatorRef.current) return
+    const updateBot = () => {
+      const store = useGameStore.getState()
+      const elapsedSeconds = Math.max(0, 90 - store.timeLeft)
+      store.setRival(botSimulatorRef.current!.sample(elapsedSeconds, store.score, Date.now()))
     }
-  }, [mode, phase, playerColor, playerName, result])
+    updateBot()
+    const timer = window.setInterval(updateBot, 100)
+    return () => window.clearInterval(timer)
+  }, [mode, phase])
+
+  useEffect(() => {
+    if (phase !== 'results' || !result) return
+    if (mode === 'bot' && botSimulatorRef.current) {
+      const finalRival = botSimulatorRef.current.sample(90, result.score, Date.now())
+      useGameStore.getState().setRival(finalRival)
+      const won = result.score > finalRival.score
+      if (result.won !== won) {
+        useGameStore.getState().finishRun({ ...result, mode: 'bot', won })
+        return
+      }
+    }
+    const { resultKey, archived } = archiveRun(result, mode)
+    if (mode === 'duel' && finishSent.current !== resultKey) {
+      finishSent.current = resultKey
+      sessionRef.current?.send({ type: 'finish', summary: result })
+    }
+    if (mode === 'solo') {
+      if (archived) {
+        gameAudio.stopMusic(0.8)
+        gameAudio.play('victory')
+      }
+      return
+    }
+    if (mode === 'bot') {
+      if (archived) {
+        gameAudio.stopMusic(0.8)
+        gameAudio.play(result.won === false ? 'defeat' : 'victory')
+      }
+      return
+    }
+
+    gameAudio.stopMusic(0.8)
+    if (remoteFinishScore.current === null) {
+      if (duelFinalizeTimer.current === null) {
+        duelFinalizeTimer.current = window.setTimeout(() => {
+          duelFinalizeTimer.current = null
+          const store = useGameStore.getState()
+          if (store.phase !== 'results' || store.mode !== 'duel' || !store.result || remoteFinishScore.current !== null) return
+          const lastSyncedScore = store.rival?.score ?? 0
+          remoteFinishScore.current = lastSyncedScore
+          flashNotice('RIVAL FINAL SIGNAL LOST // LAST SYNC LOCKED', 3_600)
+          store.finishRun({
+            ...store.result,
+            mode: 'duel',
+            won: store.result.score > lastSyncedScore,
+          })
+        }, 3_500)
+      }
+      return
+    }
+    if (resolveDuelProgression(resultKey, result.score > remoteFinishScore.current)) {
+      gameAudio.play(result.score === remoteFinishScore.current ? 'bank' : result.score > remoteFinishScore.current ? 'victory' : 'defeat')
+    }
+  }, [archiveRun, mode, phase, resolveDuelProgression, result])
 
   useEffect(() => {
     const handleKey = (event: KeyboardEvent) => {
       if ((event.key === 'Escape' || event.key.toLowerCase() === 'p') && !helpOpen) {
         const current = useGameStore.getState().phase
         if (current === 'playing' && useGameStore.getState().mode === 'duel') {
-          useGameStore.getState().setNotice('LIVE DUELS CANNOT BE PAUSED')
+          flashNotice('LIVE DUELS CANNOT BE PAUSED')
         } else if (current === 'playing') useGameStore.getState().setPhase('paused')
         else if (current === 'paused') useGameStore.getState().setPhase('playing')
       }
@@ -348,14 +540,14 @@ function App() {
   const togglePause = () => {
     const current = useGameStore.getState().phase
     if (current === 'playing' && useGameStore.getState().mode === 'duel') {
-      useGameStore.getState().setNotice('LIVE DUELS CANNOT BE PAUSED')
+      flashNotice('LIVE DUELS CANNOT BE PAUSED')
     } else if (current === 'playing') useGameStore.getState().setPhase('paused')
     else if (current === 'paused') useGameStore.getState().setPhase('playing')
   }
 
   const openHelp = () => {
     if (useGameStore.getState().phase === 'playing' && useGameStore.getState().mode === 'duel') {
-      useGameStore.getState().setNotice('MANUAL LOCKED DURING LIVE DUEL')
+      flashNotice('MANUAL LOCKED DURING LIVE DUEL')
       return
     }
     if (useGameStore.getState().phase === 'playing') useGameStore.getState().setPhase('paused')
@@ -373,30 +565,57 @@ function App() {
     url.search = ''
     url.searchParams.set('room', code)
     await navigator.clipboard.writeText(url.toString())
-    useGameStore.getState().setNotice('INVITE LINK COPIED')
+    flashNotice('INVITE LINK COPIED')
   }
 
   const replay = () => {
-    recordedResult.current = ''
     unlockGameAudio()
+    if (mode === 'duel' && (sessionRef.current?.snapshot.state !== 'connected' || remoteFinishScore.current === null)) {
+      flashNotice(remoteFinishScore.current === null ? 'WAITING FOR THE RIVAL FINAL SIGNAL' : 'RIVAL LINK IS OFFLINE')
+      return
+    }
+    if (mode === 'duel' && !isHost) {
+      sessionRef.current?.send({ type: 'rematch', accepted: true })
+      flashNotice('REMATCH SIGNAL SENT TO HOST')
+      return
+    }
+    clearDuelFinalizeTimer()
+    recordedResult.current = ''
+    resolvedDuelOutcome.current = ''
+    baseProgressionReward.current = null
+    finishSent.current = ''
+    setProgressionReward(null)
+    setCurrentRunRank(null)
     if (mode === 'solo') {
       useGameStore.getState().prepareRun('solo')
-    } else if (sessionRef.current?.snapshot.state !== 'connected' || remoteFinishScore.current === null) {
-      useGameStore.getState().setNotice('WAITING FOR THE RIVAL FINAL SIGNAL')
-    } else if (isHost) {
-      launchDuel()
+    } else if (mode === 'bot') {
+      playBot()
     } else {
-      sessionRef.current?.send({ type: 'rematch', accepted: true })
-      useGameStore.getState().setNotice('REMATCH SIGNAL SENT TO HOST')
+      launchDuel()
     }
   }
 
   const returnToMenu = () => {
+    const store = useGameStore.getState()
+    if (store.phase === 'results' && store.result) {
+      const { resultKey } = archiveRun(store.result, store.mode)
+      if (store.mode === 'duel') {
+        const finalRivalScore = remoteFinishScore.current ?? store.rival?.score ?? 0
+        remoteFinishScore.current = finalRivalScore
+        resolveDuelProgression(resultKey, store.result.score > finalRivalScore)
+      }
+    }
+    clearDuelFinalizeTimer()
     recordedResult.current = ''
+    resolvedDuelOutcome.current = ''
+    baseProgressionReward.current = null
+    finishSent.current = ''
+    setCurrentRunRank(null)
     sessionRef.current?.close('Returned to menu')
     sessionRef.current = null
+    botSimulatorRef.current = null
     gameAudio.stopMusic()
-    useGameStore.getState().returnToMenu()
+    store.returnToMenu()
   }
 
   const sendSnapshot = useCallback((snapshot: RivalSnapshot) => {
@@ -409,6 +628,7 @@ function App() {
 
   const paused = phase === 'paused'
   const hudVisible = phase === 'playing' || phase === 'paused'
+  const selectedTrail = TRAILS.find((trail) => trail.id === progression.selectedTrailId) ?? TRAILS[0]
 
   return (
     <main className={`app app--${phase}`}>
@@ -431,6 +651,7 @@ function App() {
               jamSignal={jamSignal}
               matchSeed={matchConfig?.seed}
               matchEndsAt={matchConfig ? matchConfig.startsAt + matchConfig.duration * 1_000 : undefined}
+              trailColors={selectedTrail.colors}
             />
             <SceneEffects reduced={reducedEffects} />
           </Suspense>
@@ -447,15 +668,20 @@ function App() {
           playerColor={playerColor}
           soundEnabled={soundEnabled}
           reducedEffects={reducedEffects}
+          botDifficulty={botDifficulty}
+          progression={progression}
           notice={notice}
           onNameChange={(name) => useGameStore.getState().setPlayerName(name)}
           onColorChange={(color) => useGameStore.getState().setPlayerColor(color)}
           onPlaySolo={playSolo}
+          onPlayBot={playBot}
+          onBotDifficultyChange={setBotDifficulty}
           onCreateRoom={() => void createRoom()}
           onJoinRoom={(code) => void joinRoom(code)}
           onToggleSound={() => useGameStore.getState().toggleSound()}
           onToggleReducedEffects={() => useGameStore.getState().toggleReducedEffects()}
           onOpenHelp={openHelp}
+          onTrailChange={(trailId: TrailId) => setProgression(selectTrail(trailId))}
         />
       ) : null}
 
@@ -485,6 +711,7 @@ function App() {
           multiplier={multiplier}
           comboTime={comboTime}
           charge={charge}
+          dashCooldown={dashCooldown}
           shields={shields}
           timeLeft={timeLeft}
           wave={wave}
@@ -508,12 +735,26 @@ function App() {
           playerName={playerName}
           playerColor={playerColor}
           leaderboard={leaderboard}
+          leaderboardRank={currentRunRank}
+          rival={rival}
+          progressionReward={progressionReward}
+          notice={notice}
           onPlayAgain={replay}
           onMainMenu={returnToMenu}
         />
       ) : null}
 
       <MobileControls visible={phase === 'playing'} />
+      <Onboarding
+        visible={phase === 'playing' && showTutorial}
+        score={score}
+        charge={charge}
+        objective={objective}
+        onDismiss={() => {
+          setShowTutorial(false)
+          try { window.localStorage.setItem('electrocube-onboarding-v1', 'done') } catch { /* storage is optional */ }
+        }}
+      />
       <HelpPanel open={helpOpen} onClose={() => setHelpOpen(false)} />
 
       {booting ? (

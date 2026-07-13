@@ -4,13 +4,13 @@
 
 Electrocube is a fast, neon-soaked 3D score-attack game that runs entirely in the browser. Pilot an energized cube through a procedural sci-fi arena, collect charge shards, preserve a combo, bank completed circuits at the central reactor, and survive increasingly aggressive hunter drones for 90 seconds.
 
-Play solo for a high score or open a six-character room and race one rival over a direct WebRTC data link. No account, API key, database, or game server is required.
+Play solo, challenge an instant simulated rival at three difficulty levels, or open a six-character room and race one player over a direct WebRTC data link. No account, API key, database, or game server is required.
 
 ## The objective
 
 Every run is a short risk/reward loop:
 
-1. **Collect shards.** Each shard adds score, extends a 3.25-second chain, and charges the cube's Overdrive core.
+1. **Collect shards.** Follow the bright beacon through the requested circuit colors. Off-color shards still score and charge the core; rare ringed shards restore shields or reset dash.
 2. **Keep the chain alive.** Consecutive pickups raise the multiplier up to `x5`; taking damage or letting the timer expire breaks it.
 3. **Complete the circuit.** Collect the current shard target, then return to the glowing reactor in the arena center.
 4. **Bank the circuit.** Banking locks in a wave-scaled bonus, restores a shield, adds charge, raises the wave, and increases the next target.
@@ -21,11 +21,11 @@ The run ends after 90 seconds. In a duel, the higher score wins; both players ca
 
 ## Controls
 
-| Action | Keyboard | Touch |
+| Action | Keyboard / gamepad | Touch |
 | --- | --- | --- |
 | Move | `WASD` or arrow keys | On-screen directional pad |
-| Phase dash | `Shift` | **Dash** button |
-| Overdrive pulse | `Space` at 100% charge | **Pulse** button |
+| Phase dash | `Shift` or gamepad A | **Dash** button |
+| Overdrive pulse | `Space` or gamepad B/X at 100% charge | **Pulse** button |
 | Pause / resume | `Esc`, `P`, or the HUD pause button | HUD pause button |
 | Menus | Mouse, touch, or keyboard navigation | Touch |
 
@@ -36,6 +36,7 @@ Dash has a short cooldown. The pulse consumes the full charge meter, so timing i
 - Real-time 3D arena built with React Three Fiber and Three.js
 - Procedural geometry, animated circuit shaders, particles, cube trails, shockwaves, lighting, bloom, and vignette
 - A complete 90-second solo score-attack loop with escalating waves
+- Instant deterministic Bot Clash rivals with easy, normal, and hard signal profiles
 - Casual head-to-head duels through human-friendly room codes and shareable `?room=CODE` invite links
 - Live rival snapshots, synchronized start signals, pulse-jam events, heartbeat monitoring, and rematch flow
 - Callsigns plus five emissive player palettes
@@ -43,6 +44,7 @@ Dash has a short cooldown. The pulse consumes the full charge meter, so timing i
 - Synthesized adaptive soundtrack and effects generated with the Web Audio API
 - Responsive HUD and dedicated touch controls
 - Seeded fictional legends plus a browser-local run leaderboard
+- Persistent XP, levels, six rank tiers, achievements, cumulative stats, and unlockable trail cosmetics
 - No required backend, environment variables, cookies, analytics SDK, or user account
 
 ## Run locally
@@ -95,7 +97,7 @@ These constraints make duels best suited to quick games with someone you know.
 
 The leaderboard is local, not global. It combines six built-in fictional rivals with up to 40 completed runs saved under `electrocube-leaderboard-v1` in browser `localStorage`. The results screen shows the leading entries, and storage events keep other tabs on the same origin in sync.
 
-The callsign, cube color, sound setting, and reduced-effects setting are saved separately under `electrocube-profile-v1`.
+The callsign, cube color, sound setting, and reduced-effects setting are saved separately under `electrocube-profile-v1`. XP, achievements, stats, ranks, and trail unlocks use `electrocube-progression-v1`.
 
 Nothing is uploaded by the leaderboard code. Scores do not sync between browsers, devices, domains, or private browsing sessions, and clearing site data resets saved runs and preferences.
 
@@ -108,6 +110,8 @@ Nothing is uploaded by the leaderboard code. Scores do not sync between browsers
 | State | Zustand store for game phases and HUD state, with selective profile persistence |
 | Multiplayer | A typed PeerJS wrapper with room normalization, protocol validation, single-rival admission, timeouts, and heartbeat/latency tracking |
 | Leaderboard | Defensive `localStorage` parsing, seeded legends, local score recording, and cross-tab subscriptions |
+| Progression | Persistent XP, rank tiers, achievements, run statistics, and selectable trail unlocks |
+| Bot rivals | Seeded deterministic action timelines with bounded score pressure and three difficulty profiles |
 | Audio | Lazy Web Audio oscillators, filtered noise, envelopes, panning, and a generated adaptive music loop |
 | Input | Keyboard state plus pointer-safe virtual controls for touch devices |
 | UI | Semantic React overlays with Lucide icons, accessible labels, status regions, dialogs, and reduced-effects support |

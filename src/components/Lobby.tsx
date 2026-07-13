@@ -88,7 +88,7 @@ export function Lobby({
         <section className="room-code-card" aria-labelledby="room-code-heading">
           <div>
             <span id="room-code-heading" className="room-code-card__label">
-              Secure arena code
+              Private arena code
             </span>
             <strong className="room-code-card__code" aria-label={`Arena code ${displayedCode.split('').join(' ')}`}>
               {displayedCode.split('').map((character, index) => (
@@ -98,7 +98,7 @@ export function Lobby({
           </div>
           <button className="button button--copy" type="button" onClick={() => void copyCode()} disabled={!roomCode}>
             {copyState === 'copied' ? <Check aria-hidden="true" size={18} /> : <Copy aria-hidden="true" size={18} />}
-            {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy code'}
+            {copyState === 'copied' ? 'Copied' : copyState === 'failed' ? 'Copy failed' : 'Copy invite'}
           </button>
         </section>
 

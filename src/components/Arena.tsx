@@ -6,6 +6,7 @@ import { ARENA_RADIUS } from '../game/constants'
 
 export interface ArenaProps {
   reducedEffects?: boolean
+  bankReady?: boolean
 }
 
 const COLORS = {
@@ -87,7 +88,7 @@ const FLOOR_FRAGMENT_SHADER = /* glsl */ `
   }
 `
 
-function CircuitFloor({ reducedEffects }: Required<ArenaProps>) {
+function CircuitFloor({ reducedEffects }: { reducedEffects: boolean }) {
   const materialRef = useRef<THREE.ShaderMaterial>(null)
   const uniforms = useMemo(
     () => ({
@@ -181,7 +182,7 @@ function CircuitFloor({ reducedEffects }: Required<ArenaProps>) {
   )
 }
 
-function Reactor({ reducedEffects }: Required<ArenaProps>) {
+function Reactor({ reducedEffects, bankReady }: { reducedEffects: boolean; bankReady: boolean }) {
   const gyroscopeRef = useRef<THREE.Group>(null)
   const innerRingRef = useRef<THREE.Mesh>(null)
   const coreRef = useRef<THREE.Mesh>(null)
@@ -205,7 +206,7 @@ function Reactor({ reducedEffects }: Required<ArenaProps>) {
       coreRef.current.rotation.y += delta * 0.18
     }
     if (lightRef.current) {
-      lightRef.current.intensity = 19 + Math.sin(time * 1.8) * 2.5
+      lightRef.current.intensity = (bankReady ? 27 : 19) + Math.sin(time * (bankReady ? 4.2 : 1.8)) * (bankReady ? 5 : 2.5)
     }
   })
 
@@ -227,7 +228,7 @@ function Reactor({ reducedEffects }: Required<ArenaProps>) {
       <mesh position={[0, 2.7, 0]}>
         <cylinderGeometry args={[0.42, 0.82, 4.25, 32, 1, true]} />
         <meshBasicMaterial
-          color={COLORS.cyan}
+          color={bankReady ? COLORS.gold : COLORS.cyan}
           transparent
           opacity={reducedEffects ? 0.08 : 0.16}
           blending={THREE.AdditiveBlending}
@@ -254,9 +255,9 @@ function Reactor({ reducedEffects }: Required<ArenaProps>) {
         <mesh ref={coreRef} castShadow>
           <icosahedronGeometry args={[0.93, 1]} />
           <meshStandardMaterial
-            color="#d9fdff"
-            emissive={COLORS.cyan}
-            emissiveIntensity={3.8}
+            color={bankReady ? '#fff8d5' : '#d9fdff'}
+            emissive={bankReady ? COLORS.gold : COLORS.cyan}
+            emissiveIntensity={bankReady ? 6.4 : 3.8}
             metalness={0.18}
             roughness={0.15}
             toneMapped={false}
@@ -279,8 +280,8 @@ function Reactor({ reducedEffects }: Required<ArenaProps>) {
       <pointLight
         ref={lightRef}
         position={[0, 3.3, 0]}
-        color={COLORS.cyan}
-        intensity={reducedEffects ? 12 : 19}
+        color={bankReady ? COLORS.gold : COLORS.cyan}
+        intensity={reducedEffects ? (bankReady ? 18 : 12) : bankReady ? 27 : 19}
         distance={24}
         decay={2}
       />
@@ -297,11 +298,42 @@ function Reactor({ reducedEffects }: Required<ArenaProps>) {
           noise={[1.2, 1.8, 1.2]}
         />
       )}
+
+      {bankReady ? (
+        <group>
+          <mesh position={[0, 0.08, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+            <ringGeometry args={[4.7, 5.25, 96]} />
+            <meshBasicMaterial
+              color={COLORS.gold}
+              transparent
+              opacity={0.72}
+              blending={THREE.AdditiveBlending}
+              depthWrite={false}
+              toneMapped={false}
+            />
+          </mesh>
+          <mesh position={[0, 7.5, 0]}>
+            <cylinderGeometry args={[0.12, 0.75, 14, 16, 1, true]} />
+            <meshBasicMaterial
+              color={COLORS.gold}
+              transparent
+              opacity={0.22}
+              blending={THREE.AdditiveBlending}
+              depthWrite={false}
+              side={THREE.DoubleSide}
+              toneMapped={false}
+            />
+          </mesh>
+          {!reducedEffects ? (
+            <Sparkles position={[0, 3, 0]} count={80} scale={[8, 9, 8]} size={2.8} speed={0.65} color={COLORS.gold} />
+          ) : null}
+        </group>
+      ) : null}
     </group>
   )
 }
 
-function ArenaPerimeter({ reducedEffects }: Required<ArenaProps>) {
+function ArenaPerimeter({ reducedEffects }: { reducedEffects: boolean }) {
   const monoliths = useMemo(
     () =>
       Array.from({ length: 16 }, (_, index) => {
@@ -421,7 +453,7 @@ export function BackgroundRig({ reducedEffects = false }: ArenaProps) {
   )
 }
 
-export function Arena({ reducedEffects = false }: ArenaProps) {
+export function Arena({ reducedEffects = false, bankReady = false }: ArenaProps) {
   return (
     <>
       <color attach="background" args={[COLORS.void]} />
@@ -449,7 +481,7 @@ export function Arena({ reducedEffects = false }: ArenaProps) {
       <BackgroundRig reducedEffects={reducedEffects} />
       <CircuitFloor reducedEffects={reducedEffects} />
       <ArenaPerimeter reducedEffects={reducedEffects} />
-      <Reactor reducedEffects={reducedEffects} />
+      <Reactor reducedEffects={reducedEffects} bankReady={bankReady} />
     </>
   )
 }

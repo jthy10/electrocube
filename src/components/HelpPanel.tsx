@@ -56,6 +56,7 @@ export function HelpPanel({ open, onClose }: HelpPanelProps) {
                   {KEY_BINDINGS.movement.map((key) => (
                     <kbd key={key}>{key}</kbd>
                   ))}
+                  <kbd>STICK</kbd>
                 </dd>
               </div>
               <div>
@@ -66,6 +67,7 @@ export function HelpPanel({ open, onClose }: HelpPanelProps) {
                   {KEY_BINDINGS.dash.map((key) => (
                     <kbd key={key}>{key}</kbd>
                   ))}
+                  <kbd>PAD A</kbd>
                 </dd>
               </div>
               <div>
@@ -76,6 +78,7 @@ export function HelpPanel({ open, onClose }: HelpPanelProps) {
                   {KEY_BINDINGS.pulse.map((key) => (
                     <kbd key={key}>{key}</kbd>
                   ))}
+                  <kbd>PAD B/X</kbd>
                 </dd>
               </div>
               <div>
@@ -99,7 +102,7 @@ export function HelpPanel({ open, onClose }: HelpPanelProps) {
                 <span>01</span>
                 <div>
                   <strong>Collect</strong>
-                  <p>Skim neon shards to charge your core and build a score chain.</p>
+                  <p>Follow the vertical beacon through the requested shard colors. Any shard still builds score.</p>
                 </div>
               </li>
               <li>
@@ -123,7 +126,7 @@ export function HelpPanel({ open, onClose }: HelpPanelProps) {
         <aside className="help-tip">
           <Shield aria-hidden="true" size={19} />
           <p>
-            <strong>Pilot tip:</strong> A full pulse clears nearby threats. Save one for a crowded bank run.
+            <strong>Pilot tip:</strong> Ringed rare shards can restore shields or instantly reset dash. A full pulse clears nearby threats.
           </p>
         </aside>
 

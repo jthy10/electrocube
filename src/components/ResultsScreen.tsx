@@ -1,6 +1,7 @@
 import { Crown, Gem, Home, Radio, RotateCcw, Sparkles, Target, Trophy, Zap } from 'lucide-react'
 import { CUBE_COLORS } from '../game/constants'
-import type { CubeColor, GameMode, LeaderboardEntry, RunSummary } from '../game/types'
+import type { RecordRunResult } from '../game/progression'
+import type { CubeColor, GameMode, LeaderboardEntry, RivalSnapshot, RunSummary } from '../game/types'
 
 export interface ResultsScreenProps {
   result: RunSummary
@@ -8,6 +9,10 @@ export interface ResultsScreenProps {
   playerName: string
   playerColor: CubeColor
   leaderboard?: LeaderboardEntry[]
+  leaderboardRank?: number | null
+  rival?: RivalSnapshot | null
+  progressionReward?: RecordRunResult | null
+  notice?: string
   onPlayAgain: () => void
   onMainMenu: () => void
 }
@@ -32,6 +37,10 @@ export function ResultsScreen({
   playerName,
   playerColor,
   leaderboard = [],
+  leaderboardRank = null,
+  rival = null,
+  progressionReward = null,
+  notice = '',
   onPlayAgain,
   onMainMenu,
 }: ResultsScreenProps) {
@@ -47,29 +56,44 @@ export function ResultsScreen({
   const archived = leaderboard
     .filter((entry) => !(entry.name === playerName && entry.score === result.score && entry.combo === result.bestCombo))
     .map((entry) => ({ ...entry, isPlayer: false }))
-  const standings = [...archived, fallbackEntry]
+  const allStandings = [...archived, fallbackEntry]
     .sort((left, right) => right.score - left.score || right.combo - left.combo)
-    .slice(0, 6)
-  const playerRank = standings.findIndex((entry) => entry.id === 'current-run')
-  const isDuel = mode === 'duel'
-  const victory = isDuel ? result.won !== false : true
+  const playerIndex = allStandings.findIndex((entry) => entry.id === 'current-run')
+  const playerRank = leaderboardRank && leaderboardRank > 0 ? leaderboardRank : playerIndex + 1
+  const standings = playerRank <= 6
+    ? allStandings.slice(0, 6)
+    : [...allStandings.slice(0, 5), allStandings[playerIndex]]
+  const isDuel = mode !== 'solo'
+  const tied = Boolean(isDuel && rival && result.score === rival.score)
+  const victory = tied ? false : isDuel ? result.won !== false : true
+  const scoreDelta = rival ? result.score - rival.score : 0
 
   return (
     <section className="screen-overlay results-screen" aria-labelledby="results-title">
       <div className="results-screen__burst" aria-hidden="true" />
       <div className="results-panel glass-panel">
-        <header className={`results-hero${victory ? ' results-hero--victory' : ' results-hero--defeat'}`}>
+        <header className={`results-hero${tied ? ' results-hero--draw' : victory ? ' results-hero--victory' : ' results-hero--defeat'}`}>
           <span className="results-hero__icon" aria-hidden="true">
             {victory ? <Trophy size={36} /> : <Radio size={36} />}
           </span>
-          <span className="results-hero__eyebrow">{isDuel ? 'Duel transmission complete' : 'Run uploaded'}</span>
-          <h1 id="results-title">{isDuel ? (victory ? 'Grid conquered' : 'Signal outrun') : 'Overdrive complete'}</h1>
+          <span className="results-hero__eyebrow">{isDuel ? 'Duel transmission complete' : 'Run archived locally'}</span>
+          <h1 id="results-title">{isDuel ? (tied ? 'Signal deadlock' : victory ? 'Grid conquered' : 'Signal outrun') : 'Overdrive complete'}</h1>
           <p>
-            {victory
+            {tied
+              ? `${playerName}, neither signal yielded. Run it back.`
+              : victory
               ? `${playerName}, your signal lit up the arena.`
               : `${playerName}, rematch the rival and reclaim the grid.`}
           </p>
         </header>
+
+        {isDuel && rival ? (
+          <div className="duel-result-strip">
+            <span><small>{playerName}</small><strong>{scoreFormatter.format(result.score)}</strong></span>
+            <b>{tied ? 'DRAW' : scoreDelta > 0 ? `+${scoreFormatter.format(scoreDelta)}` : scoreFormatter.format(scoreDelta)}</b>
+            <span><small>{rival.name}</small><strong>{scoreFormatter.format(rival.score)}</strong></span>
+          </div>
+        ) : null}
 
         <div className="results-layout">
           <section className="run-summary" aria-labelledby="run-summary-heading">
@@ -79,8 +103,20 @@ export function ResultsScreen({
             <strong className="run-summary__score">{scoreFormatter.format(result.score)}</strong>
             <span className="run-summary__rank">
               <Sparkles aria-hidden="true" size={15} />
-              {playerRank >= 0 ? `Rank ${playerRank + 1} this session` : 'Unranked signal'}
+              {playerRank > 0 ? `Rank ${playerRank} in device archive` : 'Unranked signal'}
             </span>
+
+            {progressionReward ? (
+              <div className="progression-reward">
+                <span><strong>+{scoreFormatter.format(progressionReward.xpEarned)} XP</strong> · Level {progressionReward.progression.level}</span>
+                {progressionReward.newlyUnlockedAchievements.slice(0, 2).map((achievement) => (
+                  <em key={achievement.id}>Achievement // {achievement.title}</em>
+                ))}
+                {progressionReward.newlyUnlockedTrails.slice(0, 1).map((trail) => (
+                  <em key={trail.id}>Trail unlocked // {trail.label}</em>
+                ))}
+              </div>
+            ) : null}
 
             <dl className="run-stats">
               <div>
@@ -117,19 +153,22 @@ export function ResultsScreen({
           <section className="leaderboard-card" aria-labelledby="leaderboard-heading">
             <header className="leaderboard-card__header">
               <div>
-                <span>Live archive</span>
+                <span>On-device archive</span>
                 <h2 id="leaderboard-heading">Top signals</h2>
               </div>
               <Trophy aria-hidden="true" size={21} />
             </header>
 
             <ol className="leaderboard-list">
-              {standings.map((entry, index) => {
+              {standings.map((entry) => {
                 const highlighted = entry.isPlayer || entry.name === playerName
+                const actualRank = entry.id === 'current-run'
+                  ? playerRank
+                  : allStandings.findIndex((candidate) => candidate.id === entry.id) + 1
                 return (
                   <li key={entry.id} className={highlighted ? 'leaderboard-row leaderboard-row--player' : 'leaderboard-row'}>
-                    <span className={`leaderboard-row__rank leaderboard-row__rank--${Math.min(index + 1, 4)}`}>
-                      {index === 0 ? <Crown aria-hidden="true" size={15} /> : medalLabel(index)}
+                    <span className={`leaderboard-row__rank leaderboard-row__rank--${Math.min(actualRank, 4)}`}>
+                      {actualRank === 1 ? <Crown aria-hidden="true" size={15} /> : medalLabel(actualRank - 1)}
                     </span>
                     <span
                       className="leaderboard-row__signal"
@@ -149,6 +188,7 @@ export function ResultsScreen({
         </div>
 
         <footer className="results-actions">
+          {notice ? <span className="results-notice" role="status">{notice}</span> : null}
           <button className="button button--ghost" type="button" onClick={onMainMenu}>
             <Home aria-hidden="true" size={18} /> Main menu
           </button>
