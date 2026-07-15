@@ -142,6 +142,6 @@ Vercel supplies HTTPS, which is the correct production context for WebRTC and cl
 
 ## Assets and licensing
 
-Electrocube does not bundle stock imagery, commercial fonts, downloaded textures, third-party 3D models, samples, or recorded music. Arena geometry, materials, GLSL effects, particles, and audio are produced at runtime from project code, so there are no external media-asset attribution or licensing requirements.
+Apart from the original promotional social card, Electrocube does not bundle stock imagery, commercial fonts, downloaded textures, third-party 3D models, samples, or recorded music. Arena geometry, materials, GLSL effects, particles, and audio are produced at runtime from project code, so there are no external media-asset attribution or licensing requirements.
 
 Lucide icons and the JavaScript packages listed in `package.json` are open-source dependencies and remain subject to their own upstream licenses. This asset note does not replace those dependency licenses or define a license for the Electrocube source code itself.
